@@ -7,24 +7,34 @@ dofile ("Utils.lua")
 --Example: initalTargetFrame is 6029 and maxDelay is 40, so the branch should be saved at or after frame 6069
 --TODO how well/poorly does this bot work if the delayPoints are not sorted initially?
 
-local logInterval = 200
+local logInterval = 1000
 local gcInterval = 1000
-local branchNum = 67
+local branchNum = 68
 local maxDelay = Route["maxDelay"]
 local initialTargetFrame = Route["initialTargetFrame"]
-local delayPoints = Route["delayPoints"]--TODO add delayFrames to each element, instead of expecting the Route to have them already? only if they are nil
+local delayPoints = Route["delayPoints"]
 local numDelayPoints = table.getn(delayPoints)
 local targetState = Route["targetState"]
 local candidates = {}
 local passCount = 0
 local resumeFlag = false
+local failureStates = {}
+local failureStateIndexes = {}
 for x, v in pairs(delayPoints) do
 	if v["delayFrames"] > 0 then
 		resumeFlag = true
 	end
 end
 
-function checkBagPocket()
+for i, delayPoint in pairs(delayPoints) do
+	if delayPoint["failureState"] ~= nil then
+		failureStates[tonumber(i)] = delayPoint["failureState"]
+	end
+end
+for k in pairs(failureStates) do table.insert(failureStateIndexes, k) end
+table.sort(failureStateIndexes)
+
+function checkBagStatus()
 	local bagData = Utils.getBagData()
 	return (targetState["bagPocket"] == bagData["bagPocket"])
 end
@@ -104,32 +114,55 @@ function runTest()
 		collectgarbage()
 	end
 	
-	while emu.framecount() < targetFrame do
-		emu.frameadvance()
+	local earlyFailure = false
+	for _, k in ipairs(failureStateIndexes) do
+		if not earlyFailure then
+			local intermediateTargetFrame = delayPoints[k]["frame"] + getTotalDelay(k)
+			while emu.framecount() < intermediateTargetFrame do
+				emu.frameadvance()
+			end
+			if failureStates[k]["map"] ~= nil then
+				local locationData = Utils.getLocation()
+				earlyFailure = (locationData["map"] ~= failureStates[k]["map"])
+			elseif failureStates[k]["bagPocket"] ~= nil then
+				local bagData = Utils.getBagData()
+				earlyFailure = (bagData["bagPocket"] ~= failureStates[k]["bagPocket"])
+			elseif failureStates[k]["pokemonID"] ~= nil then
+				local pokemonData = Utils.getPokemonData(2, 1)--TODO enhance this to look for other slots
+				earlyFailure = (pokemonData["pokemonID"] ~= failureStates[k]["pokemonID"])
+			end
+		end
 	end
 	
-	if checkBagPocket() then
-		if checkLocation() then
-			if checkPokemonStats() then
-				if totalDelay < maxDelay then
-					maxDelay = totalDelay
+	if not earlyFailure then
+		while emu.framecount() < targetFrame do
+			emu.frameadvance()
+		end
+		
+		--TODO combine the check functions
+		if checkBagStatus() then
+			if checkLocation() then
+				if checkPokemonStats() then
+					if totalDelay < maxDelay then
+						--wipe the existing candidates
+						local count = table.getn(candidates)
+						for k = 0, count do candidates[k] = nil end
+						maxDelay = totalDelay
+					end
 					
-					--wipe the existing candidates
-					local count = table.getn(candidates)
-					for k = 0, count do candidates[k] = nil end
+					--TODO why does this work for the version of deepcopy in the same file, but not the version in Utils?
+					table.insert(candidates, deepcopy(delayPoints))
+					--table.insert(candidates, Utils.deepcopy(delayPoints))
+					
+					console.writeline("Matched the target state for inputs " .. inputString .. ", maxDelay = " .. totalDelay .. ", found " .. table.getn(candidates) .. " candidates at this delay length")
 				end
-				
-				--TODO why does this work for the version of deepcopy in the same file, but not the version in Utils?
-				table.insert(candidates, deepcopy(delayPoints))
-				--table.insert(candidates, Utils.deepcopy(delayPoints))
-				
-				console.writeline("Matched the target state for inputs " .. inputString .. ", maxDelay = " .. totalDelay .. ", found " .. table.getn(candidates) .. " candidates at this delay length")
 			end
 		end
 	end
 	passCount = passCount + 1
 end
 
+--TODO document this function better? I can see it works, but I don't remember how
 function searchFromInitialIndex(index)
 	if index == numDelayPoints then --recursion base case
 		if resumeFlag then

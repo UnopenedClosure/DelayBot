@@ -110,7 +110,8 @@ end
 
 function Utils.getBagData()
 	return {
-		bagPocket = Memory.readbyte(0x0203AD02)
+		bagPocket = Memory.readbyte(0x0203AD02),
+		registeredItem = Memory.readword(Memory.readdword(0x03005008) + 0x296)
 	}
 end
 
